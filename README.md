@@ -105,7 +105,7 @@ acquire `editor_lease` with a stable client name and release it when done. On `b
 
 ## Status
 
-Version 0.1. Tested on Unity 6000.3.16f1 on Linux, on one commercial project.
+Agent Checks is in development. Expect changes and rough edges, and please report them. Developed on Unity 6000.3.16f1 on Linux.
 
 ## License
 
