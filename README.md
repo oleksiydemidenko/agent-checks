@@ -1,5 +1,7 @@
 # Agent Checks
 
+Early development: expect changes and rough edges.
+
 Compact project checks for coding agents working in Unity. They do what agents are bad at doing by reading files: spot scene damage, see a hierarchy without serializing components, share one Editor, and report project health in a few lines.
 
 | Tool | Kind | Purpose |

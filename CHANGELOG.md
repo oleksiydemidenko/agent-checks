@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.1
+
+- Noted the early development status in the package description.
+
 ## 0.1.0
 
 First public version.
