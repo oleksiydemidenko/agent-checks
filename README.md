@@ -1,8 +1,6 @@
 # Agent Checks
 
-Early development: expect changes and rough edges.
-
-Compact project checks for coding agents working in Unity. They do what agents are bad at doing by reading files: spot scene damage, see a hierarchy without serializing components, share one Editor, and report project health in a few lines.
+Compact project checks for coding agents working in Unity. They report scene damage, show a hierarchy without serializing components, let agents share one Editor, and report project state in a few lines.
 
 | Tool | Kind | Purpose |
 | --- | --- | --- |
@@ -23,7 +21,7 @@ https://github.com/oleksiydemidenko/agent-checks.git
 
 ## scene_guard
 
-A scene diff of a real Unity project is unreadable for an agent. `scene_guard` compares per YAML document and reports objects by hierarchy path:
+`scene_guard` compares scenes and prefabs per YAML document and reports objects by hierarchy path:
 
 ```
 dotnet run --project <package>/Tools~/SceneGuard -- .
@@ -43,7 +41,7 @@ dotnet run --project <package>/Tools~/ProjectCheck -- . --scope=all
 
 Scopes: `all`, `code`, `assets`, `architecture`. The MCP tool `project_check` adds the Editor checks: compile state, console errors and your own checks.
 
-Each known issue can be accepted as one exact line in the baseline file. A baseline line that no longer matches fails the check, so the baseline cannot rot. Agents should never add lines without a person's approval.
+Each known issue can be accepted as one exact line in the baseline file. A baseline line that no longer matches fails the check. Agents should never add lines without a person's approval.
 
 ## Configure
 
@@ -107,7 +105,7 @@ acquire `editor_lease` with a stable client name and release it when done. On `b
 
 ## Status
 
-Agent Checks is in development. Expect changes and rough edges, and please report them. Developed on Unity 6000.3.16f1 on Linux.
+Agent Checks is in development. It is developed on Unity 6000.3.16f1 on Linux. Issues are welcome.
 
 ## License
 
