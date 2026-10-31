@@ -1,0 +1,4 @@
+current.yaml (base.yaml -> current.yaml): 1 changed, 0 added, 0 removed, 0 whitespace-only
+  ~ Camera on 'View Camera' &300: m_TargetTexture
+scene_guard: damage camera-target-texture-reset current.yaml &300 Camera on 'View Camera': m_TargetTexture was 0123456789abcdef0123456789abcdef
+Scene guard: 1 files, 1 changed objects, 1 damage, 0 review.

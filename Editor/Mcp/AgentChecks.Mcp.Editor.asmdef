@@ -1,0 +1,27 @@
+{
+  "name": "AgentChecks.Mcp.Editor",
+  "rootNamespace": "AgentChecks.Editor.Mcp",
+  "references": [
+    "AgentChecks.Editor",
+    "MCPForUnity.Editor"
+  ],
+  "includePlatforms": [
+    "Editor"
+  ],
+  "excludePlatforms": [],
+  "allowUnsafeCode": false,
+  "overrideReferences": false,
+  "precompiledReferences": [],
+  "autoReferenced": true,
+  "defineConstraints": [
+    "AGENT_CHECKS_COPLAY_UNITY_MCP"
+  ],
+  "versionDefines": [
+    {
+      "name": "com.coplaydev.unity-mcp",
+      "expression": "10.1.0",
+      "define": "AGENT_CHECKS_COPLAY_UNITY_MCP"
+    }
+  ],
+  "noEngineReferences": false
+}

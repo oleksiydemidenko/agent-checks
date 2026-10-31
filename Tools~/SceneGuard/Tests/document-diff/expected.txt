@@ -1,0 +1,12 @@
+current.yaml (base.yaml -> current.yaml): 4 changed, 1 added, 2 removed, 1 whitespace-only
+  ~ GameObject 'Root' &100: m_Component
+  ~ RequiredRenderer on 'Root' &103: m_Enabled
+  ~ Camera on 'Root/Child' &202: field of view
+  ~ PrefabInstance 'Station' &400: modifications +0 -1 ~0 (_speed)
+  + GameObject 'Added' &600
+  - GameObject 'Removed' &300
+  - Transform on 'Removed' &301
+scene_guard: review component-order current.yaml &100 GameObject 'Root': same components in a different order
+scene_guard: damage required-renderer-disabled current.yaml &103 RequiredRenderer on 'Root': m_Enabled 1 -> 0
+scene_guard: review prefab-modification-removed current.yaml &400 PrefabInstance 'Station': removed _speed; source prefab unchanged
+Scene guard: 1 files, 7 changed objects, 1 damage, 2 review.

@@ -1,0 +1,15 @@
+{
+  "name": "com.oleksiydemidenko.agent-checks",
+  "version": "0.1.0",
+  "displayName": "Agent Checks",
+  "description": "Compact project checks for coding agents working in Unity: scene and prefab damage detection, hierarchy summaries, an editor lease for parallel agents and one report over compile state, console and project checks.",
+  "unity": "6000.3",
+  "license": "MIT",
+  "author": {
+    "name": "Oleksiy Demidenko",
+    "url": "https://github.com/oleksiydemidenko"
+  },
+  "dependencies": {
+    "com.unity.nuget.newtonsoft-json": "3.2.1"
+  }
+}

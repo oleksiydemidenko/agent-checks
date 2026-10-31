@@ -1,0 +1,10 @@
+# Changelog
+
+## 0.1.0
+
+First public version.
+
+- `scene_guard`: per-object scene and prefab diff with editor-damage detection and a commit hook.
+- `project_check`: one compact report with a reviewed baseline and extension points for project checks.
+- `hierarchy_summary`: compact scene and prefab hierarchy with extension points for labels.
+- `editor_lease`: cooperative lease for agents sharing one Unity Editor.

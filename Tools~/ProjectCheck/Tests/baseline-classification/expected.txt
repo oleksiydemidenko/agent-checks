@@ -1,0 +1,6 @@
+Project check (editor): fail. 2 new, 1 known, 1 stale.
+  console warn, reference fail (1 known)
+new: reference: new.prefab: D -> E.f has a missing reference.
+new: console: new warning
+stale baseline line (delete it): reference: fixed.prefab: G -> H.i is required but not assigned.
+note: conformance: 3 warnings

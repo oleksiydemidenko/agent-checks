@@ -1,0 +1,21 @@
+{
+  "name": "AgentChecks.Editor.Tests",
+  "rootNamespace": "AgentChecks.Editor.Tests",
+  "references": [
+    "AgentChecks.Editor"
+  ],
+  "includePlatforms": [
+    "Editor"
+  ],
+  "excludePlatforms": [],
+  "allowUnsafeCode": false,
+  "overrideReferences": false,
+  "precompiledReferences": [],
+  "autoReferenced": false,
+  "defineConstraints": [],
+  "versionDefines": [],
+  "noEngineReferences": false,
+  "optionalUnityReferences": [
+    "TestAssemblies"
+  ]
+}

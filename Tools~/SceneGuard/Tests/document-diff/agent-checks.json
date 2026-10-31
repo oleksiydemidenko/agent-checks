@@ -1,0 +1,10 @@
+{
+    "sceneGuard": {
+        "requiredEnabled": [
+            {
+                "kind": "required-renderer-disabled",
+                "script": "Assets/RequiredRenderer.cs"
+            }
+        ]
+    }
+}

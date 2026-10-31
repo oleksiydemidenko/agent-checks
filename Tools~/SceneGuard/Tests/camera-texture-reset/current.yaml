@@ -1,0 +1,16 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1 &100
+GameObject:
+  m_Component:
+  - component: {fileID: 200}
+  - component: {fileID: 300}
+  m_Name: View Camera
+--- !u!4 &200
+Transform:
+  m_GameObject: {fileID: 100}
+  m_Father: {fileID: 0}
+--- !u!20 &300
+Camera:
+  m_GameObject: {fileID: 100}
+  m_TargetTexture: {fileID: 0}

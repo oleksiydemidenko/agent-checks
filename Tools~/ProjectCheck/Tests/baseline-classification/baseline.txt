@@ -1,0 +1,4 @@
+# Fixture baseline.
+reference: known.prefab: A -> B.c is required but not assigned.
+reference: fixed.prefab: G -> H.i is required but not assigned.
+dependency: Not/Run -> Not/Checked

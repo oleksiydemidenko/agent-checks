@@ -1,0 +1,1 @@
+{"ran":["reference","console"],"errors":["reference: known.prefab: A -> B.c is required but not assigned.","reference: new.prefab: D -> E.f has a missing reference."],"warnings":["console: new warning"],"notes":["conformance: 3 warnings"]}
