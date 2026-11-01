@@ -1,6 +1,6 @@
 {
   "name": "com.oleksiydemidenko.agent-checks",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "displayName": "Agent Checks",
   "description": "Compact project checks for coding agents working in Unity: scene and prefab damage detection, hierarchy summaries, an editor lease for parallel agents and one report over compile state, console and project checks. In development.",
   "unity": "6000.3",

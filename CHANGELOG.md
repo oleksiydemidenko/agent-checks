@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.2
+
+- Recognize configured component-owned camera render targets without suppressing missing target, asset or owner errors.
+- Read scene guard configuration, script GUIDs and render textures from the selected Git snapshot for staged and revision checks.
+- Add camera ownership and staged-reference regression checks; normalize fixture output across operating systems.
+
 ## 0.1.1
 
 - Noted the early development status in the package description.

@@ -51,7 +51,7 @@ public static class Program
                 var changed = source.ChangedFiles(root);
                 var scenes = changed.Where(IsSceneFile).Where(path => paths.Length == 0 || paths.Any(prefix => path.StartsWith(prefix, StringComparison.Ordinal)))
                     .Select(path => (path, source.ReadBase(root, path), source.ReadTarget(root, path))).ToArray();
-                return Analyze(root, scenes, changed.ToHashSet(StringComparer.Ordinal), source.BaseLabel, source.TargetLabel);
+                return Analyze(root, scenes, changed.ToHashSet(StringComparer.Ordinal), source.BaseLabel, source.TargetLabel, source);
             }
             report = AnalyzeSource();
             var restore = Option("restore");
@@ -182,15 +182,23 @@ public static class Program
         return baseName.Length > 0 ? baseName : name;
     }
 
-    private static JsonArray ConfigRules(string root, string section)
+    private static string ReadFile(string root, string path, Source? source = null)
     {
-        var config = Path.Combine(root, "agent-checks.json");
-        return !File.Exists(config) ? new JsonArray() : JsonNode.Parse(File.ReadAllText(config))?["sceneGuard"]?[section]?.AsArray() ?? new JsonArray();
+        if (source != null)
+            return source.ReadTarget(root, path);
+        var file = Path.Combine(root, path);
+        return File.Exists(file) ? File.ReadAllText(file) : string.Empty;
     }
 
-    private static List<(string Kind, string Guid)> RequiredEnabledScripts(string root, GuidPaths scripts)
+    private static JsonArray ConfigRules(string root, string section, Source? source = null)
     {
-        return ConfigRules(root, "requiredEnabled")
+        var config = ReadFile(root, "agent-checks.json", source);
+        return config.Length == 0 ? new JsonArray() : JsonNode.Parse(config)?["sceneGuard"]?[section]?.AsArray() ?? new JsonArray();
+    }
+
+    private static List<(string Kind, string Guid)> RequiredEnabledScripts(string root, GuidPaths scripts, Source? source = null)
+    {
+        return ConfigRules(root, "requiredEnabled", source)
             .Select(rule => (Kind: (string)rule!["kind"]!, Guid: scripts.Guid((string)rule!["script"]!)))
             .Where(rule => rule.Guid != null).Select(rule => (rule.Kind, rule.Guid!)).ToList();
     }
@@ -204,17 +212,83 @@ public static class Program
 
     private static bool IsSceneFile(string path) => path.EndsWith(".unity", StringComparison.Ordinal) || path.EndsWith(".prefab", StringComparison.Ordinal);
 
-    private static Report Analyze(string root, IEnumerable<(string Path, string Base, string Target)> files, HashSet<string> changedFiles, string baseLabel, string targetLabel)
+    private static (string FileId, string Guid)? AssetReference(string block)
+    {
+        var id = FileIdValue.Match(block);
+        var guid = GuidValue.Match(block);
+        return id.Success && id.Groups[1].Value != "0" && guid.Success ? (id.Groups[1].Value, guid.Groups[1].Value) : null;
+    }
+
+    private static string LocalReference(string block) => GuidValue.IsMatch(block) ? string.Empty : FileIdValue.Match(block).Groups[1].Value;
+
+    private static void CheckCameraTargets(string root, string path, SceneFile before, SceneFile after, GuidPaths scripts, Report report, Source? source)
+    {
+        var owners = ConfigRules(root, "cameraTargetOwners", source).Select(rule =>
+        {
+            var scriptPath = (string)rule!["script"]!;
+            var meta = ReadFile(root, scriptPath + ".meta", source);
+            return (Script: GuidValue.Match(meta).Groups[1].Value,
+                PreviousScript: GuidValue.Match(source == null ? meta : source.ReadBase(root, scriptPath + ".meta")).Groups[1].Value,
+                CameraField: (string)rule["cameraField"]!, TargetField: (string)rule["targetField"]!, ScriptPath: scriptPath);
+        }).Where(rule => rule.Script.Length > 0 || rule.PreviousScript.Length > 0).ToArray();
+        var assets = new GuidPaths(root, ".meta", source);
+        bool HasTexture((string FileId, string Guid) reference)
+        {
+            var assetPath = assets.Path(reference.Guid);
+            return assetPath != null && new SceneFile(ReadFile(root, assetPath, source)).Documents.TryGetValue(reference.FileId, out var asset) && asset.ClassName == "RenderTexture";
+        }
+        IEnumerable<(Document Component, string TargetField, string ScriptPath)> CameraOwners(SceneFile scene, Document camera, bool baseline = false)
+        {
+            var gameObjectId = LocalReference(camera.Block("m_GameObject"));
+            if (!scene.Documents.TryGetValue(gameObjectId, out var gameObject))
+                yield break;
+            var components = FileIdValue.Matches(gameObject.Block("m_Component")).Select(match => match.Groups[1].Value).ToHashSet();
+            if (!components.Contains(camera.FileId))
+                yield break;
+            foreach (var component in scene.Ordered.Where(component => components.Contains(component.FileId) &&
+                         LocalReference(component.Block("m_GameObject")) == gameObjectId && component.Value("m_Enabled") == "1"))
+            foreach (var rule in owners.Where(rule => component.Script == (baseline ? rule.PreviousScript : rule.Script) && LocalReference(component.Block(rule.CameraField)) == camera.FileId))
+                yield return (component, rule.TargetField, rule.ScriptPath);
+        }
+        foreach (var camera in before.Ordered.Where(document => document.ClassName == "Camera"))
+        {
+            if (!after.Documents.TryGetValue(camera.FileId, out var current) || current.ClassName != "Camera")
+                continue;
+            var oldDirect = AssetReference(camera.Block("m_TargetTexture"));
+            var oldOwner = CameraOwners(before, camera, true).FirstOrDefault(owner => AssetReference(owner.Component.Block(owner.TargetField)) != null);
+            var expected = oldDirect ?? (oldOwner.Component == null ? null : AssetReference(oldOwner.Component.Block(oldOwner.TargetField)));
+            if (expected == null)
+                continue;
+            var direct = AssetReference(current.Block("m_TargetTexture"));
+            var ownerStillActive = oldOwner.Component != null && after.Documents.TryGetValue(oldOwner.Component.FileId, out var ownerNow) && ownerNow.Value("m_Enabled") == "1";
+            if (direct != null && !ownerStillActive && (oldDirect != null || HasTexture(direct.Value)))
+                continue;
+            var candidates = CameraOwners(after, current).ToArray();
+            if (candidates.Length == 1 && AssetReference(candidates[0].Component.Block(candidates[0].TargetField)) == expected &&
+                ReadFile(root, candidates[0].ScriptPath, source).Length > 0 && HasTexture(expected.Value))
+            {
+                if (oldDirect != null && direct == null)
+                    report.Notes.Add($"scene_guard: info camera-target-owned {path} &{camera.FileId}: target preserved by {Path.GetFileNameWithoutExtension(candidates[0].ScriptPath)}.{candidates[0].TargetField}");
+                continue;
+            }
+            var kind = oldOwner.Component == null ? "camera-target-texture-reset" : "camera-target-owner-lost";
+            var detail = oldOwner.Component == null ? "m_TargetTexture was " + expected.Value.Guid : "no valid direct or component-owned RenderTexture; expected " + expected.Value.Guid + " fileID " + expected.Value.FileId;
+            report.Add(true, kind, path, current, after.Describe(current, scripts), detail);
+        }
+    }
+
+    private static Report Analyze(string root, IEnumerable<(string Path, string Base, string Target)> files, HashSet<string> changedFiles, string baseLabel, string targetLabel, Source? source = null)
     {
         var report = new Report(baseLabel, targetLabel);
-        var scripts = new GuidPaths(root, ".cs.meta");
-        var prefabs = new GuidPaths(root, ".prefab.meta");
-        var requiredEnabled = RequiredEnabledScripts(root, scripts);
+        var scripts = new GuidPaths(root, ".cs.meta", source);
+        var prefabs = new GuidPaths(root, ".prefab.meta", source);
+        var requiredEnabled = RequiredEnabledScripts(root, scripts, source);
         foreach (var (path, baseText, targetText) in files.OrderBy(file => file.Path, StringComparer.Ordinal))
         {
             var before = new SceneFile(baseText);
             var after = new SceneFile(targetText);
             var result = new FileResult(path, before, after);
+            CheckCameraTargets(root, path, before, after, scripts, report, source);
             foreach (var document in after.Documents.Values)
             {
                 if (!before.Documents.TryGetValue(document.FileId, out var old))
@@ -235,8 +309,6 @@ public static class Program
                 result.Changed++;
                 var description = after.Describe(document, scripts);
                 result.Objects.Add($"~ {description} &{document.FileId}: {ChangedKeys(old, document)}");
-                if (document.ClassName == "Camera" && GuidValue.IsMatch(old.Block("m_TargetTexture")) && document.Value("m_TargetTexture") == "{fileID: 0}")
-                    report.Add(true, "camera-target-texture-reset", path, document, description, "m_TargetTexture was " + GuidValue.Match(old.Block("m_TargetTexture")).Groups[1].Value);
                 foreach (var rule in requiredEnabled.Where(rule => document.Script == rule.Guid && document.Value("m_Enabled") == "0" && old.Value("m_Enabled") != "0"))
                     report.Add(true, rule.Kind, path, document, description, "m_Enabled 1 -> 0");
                 if (document.ClassName == "GameObject")
@@ -306,7 +378,7 @@ public static class Program
                 foreach (var id in file.Whitespace)
                     replacements[id] = file.Before.Documents[id].Raw;
             if (repairDamage)
-                foreach (var issue in report.Issues.Where(issue => issue.Damage && issue.Path == file.Path && file.Before.Documents.ContainsKey(issue.FileId)))
+                foreach (var issue in report.Issues.Where(issue => issue.Damage && issue.Kind != "camera-target-owner-lost" && issue.Path == file.Path && file.Before.Documents.ContainsKey(issue.FileId)))
                 {
                     var key = issue.Kind == "camera-target-texture-reset" ? "m_TargetTexture" : "m_Enabled";
                     var current = replacements.TryGetValue(issue.FileId, out var replaced) ? replaced : file.After.Documents[issue.FileId].Raw;
@@ -340,7 +412,7 @@ public static class Program
             var name = Path.GetFileName(directory);
             var report = Analyze(directory, new[] { ("current.yaml", File.ReadAllText(Path.Combine(directory, "base.yaml")), File.ReadAllText(Path.Combine(directory, "current.yaml"))) },
                 new HashSet<string>(), "base.yaml", "current.yaml");
-            var actual = report.Text(int.MaxValue).TrimEnd('\n').Split('\n');
+            var actual = report.Text(int.MaxValue).Replace("\r", string.Empty).TrimEnd('\n').Split('\n');
             var expected = File.ReadAllLines(Path.Combine(directory, "expected.txt"));
             if (actual.SequenceEqual(expected))
             {
@@ -354,7 +426,116 @@ public static class Program
             foreach (var line in actual.Except(expected))
                 Console.WriteLine("  unexpected: " + line);
         }
+        failures += RunCameraTargetTests(testsRoot);
         return failures == 0 ? 0 : 1;
+    }
+
+    private static int RunCameraTargetTests(string testsRoot)
+    {
+        var root = Path.Combine(Path.GetTempPath(), "agent-checks-camera-target-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(root, "Assets"));
+        var failures = 0;
+        const string texture = "{fileID: 8400000, guid: 0123456789abcdef0123456789abcdef, type: 2}";
+        const string ownerScript = "abcdef0123456789abcdef0123456789";
+        var plain = File.ReadAllText(Path.Combine(testsRoot, "camera-texture-reset/base.yaml")).Replace("\r", string.Empty);
+        var owned = plain.Replace("  - component: {fileID: 300}", "  - component: {fileID: 300}\n  - component: {fileID: 400}") +
+            "--- !u!114 &400\nMonoBehaviour:\n  m_GameObject: {fileID: 100}\n  m_Enabled: 1\n  m_Script: {fileID: 11500000, guid: " + ownerScript + ", type: 3}\n  _Camera: {fileID: 300}\n  _Target: " + texture + "\n";
+        var buffered = owned.Replace("m_TargetTexture: " + texture, "m_TargetTexture: {fileID: 0}");
+        const string asset = "%YAML 1.1\n--- !u!84 &8400000\nRenderTexture:\n  m_Name: View\n";
+        const string config = "{\"sceneGuard\":{\"cameraTargetOwners\":[{\"script\":\"Assets/RenderOwner.cs\",\"cameraField\":\"_Camera\",\"targetField\":\"_Target\"}]}}";
+        void Write(string path, string text) => File.WriteAllText(Path.Combine(root, path), text);
+        void Check(string name, string before, string after, string? expectedKind = null, Source? source = null)
+        {
+            var report = Analyze(root, new[] { ("Assets/View.unity", before, after) }, new HashSet<string>(), "base", "target", source);
+            var passed = expectedKind == null ? report.Issues.Count == 0 : report.Issues.Count == 1 && report.Issues[0].Kind == expectedKind && report.Issues[0].Damage;
+            Console.WriteLine((passed ? "PASS " : "FAIL ") + name);
+            if (!passed)
+            {
+                failures++;
+                Console.Write(report.Text(int.MaxValue));
+            }
+        }
+        void Snapshot(string name, string? expectedKind = null, Source? source = null)
+        {
+            source ??= Source.From(null, null, null, true);
+            if (!source.ChangedFiles(root).Contains("Assets/View.unity"))
+                throw new InvalidOperationException("Snapshot test requires a changed scene: " + name);
+            Check(name, source.ReadBase(root, "Assets/View.unity"), source.ReadTarget(root, "Assets/View.unity"), expectedKind, source);
+        }
+        void RunGit(params string[] arguments)
+        {
+            var result = GitResult(root, arguments);
+            if (!result.Success)
+                throw new InvalidOperationException("Test git command failed: " + string.Join(" ", arguments));
+        }
+        try
+        {
+            Write("agent-checks.json", config);
+            Write("Assets/RenderOwner.cs", "class RenderOwner {}\n");
+            Write("Assets/RenderOwner.cs.meta", "fileFormatVersion: 2\nguid: " + ownerScript + "\n");
+            Write("Assets/View.renderTexture", asset);
+            Write("Assets/View.renderTexture.meta", "fileFormatVersion: 2\nguid: 0123456789abcdef0123456789abcdef\n");
+            Check("owned-camera-buffer-binding", owned, buffered);
+            Check("owned-camera-unchanged", buffered, buffered);
+            Check("ordinary-camera-reset", plain, plain.Replace("m_TargetTexture: " + texture, "m_TargetTexture: {fileID: 0}"), "camera-target-texture-reset");
+            Check("owner-target-lost-with-unchanged-camera", buffered, buffered.Replace("_Target: " + texture, "_Target: {fileID: 0}"), "camera-target-owner-lost");
+            Check("owner-target-wrong-fileid", buffered, buffered.Replace("_Target: " + texture, "_Target: " + texture.Replace("8400000", "8400001")), "camera-target-owner-lost");
+            Check("owner-target-wrong-guid", buffered, buffered.Replace("_Target: " + texture, "_Target: " + texture.Replace("0123456789abcdef0123456789abcdef", ownerScript)), "camera-target-owner-lost");
+            Check("owner-wrong-camera", owned, buffered.Replace("_Camera: {fileID: 300}", "_Camera: {fileID: 301}"), "camera-target-owner-lost");
+            Check("owner-disabled", buffered, buffered.Replace("m_Enabled: 1", "m_Enabled: 0"), "camera-target-owner-lost");
+            Check("owner-removed", buffered, buffered[..buffered.IndexOf("--- !u!114", StringComparison.Ordinal)].Replace("  - component: {fileID: 400}\n", ""), "camera-target-owner-lost");
+            Check("owner-detached", buffered, buffered.Replace("  - component: {fileID: 400}\n", ""), "camera-target-owner-lost");
+            Check("direct-binding-restored", buffered, owned.Replace("m_Enabled: 1", "m_Enabled: 0"));
+            Check("active-owner-cannot-hide-behind-direct-binding", owned, owned.Replace("_Target: " + texture, "_Target: {fileID: 0}"), "camera-target-owner-lost");
+            File.Delete(Path.Combine(root, "Assets/View.renderTexture"));
+            Check("owner-asset-missing", owned, buffered, "camera-target-owner-lost");
+            Write("Assets/View.renderTexture", asset.Replace("RenderTexture:", "Material:"));
+            Check("owner-asset-wrong-type", owned, buffered, "camera-target-owner-lost");
+            Write("Assets/View.renderTexture", asset);
+            Write("Assets/View.unity", owned);
+            RunGit("init", "-q");
+            RunGit("add", ".");
+            RunGit("-c", "user.name=SceneGuard Tests", "-c", "user.email=tests@example.invalid", "commit", "-qm", "Create camera fixture");
+            Write("Assets/View.unity", buffered);
+            RunGit("add", "Assets/View.unity");
+            Write("agent-checks.json", "{}");
+            Write("Assets/RenderOwner.cs.meta", "guid: 00000000000000000000000000000000\n");
+            Write("Assets/View.renderTexture", "");
+            Snapshot("staged-config-script-and-asset-ignore-working-tree");
+            Write("agent-checks.json", config);
+            Write("Assets/RenderOwner.cs.meta", "fileFormatVersion: 2\nguid: " + ownerScript + "\n");
+            Write("Assets/View.renderTexture", asset);
+            Write("Assets/View.unity", buffered.Replace("_Target: " + texture, "_Target: {fileID: 0}"));
+            RunGit("add", "Assets/View.unity");
+            Write("Assets/View.unity", buffered);
+            Snapshot("staged-damage-cannot-be-hidden-by-working-tree", "camera-target-owner-lost");
+            RunGit("add", "Assets/View.unity");
+            RunGit("rm", "-q", "Assets/View.renderTexture");
+            Write("Assets/View.renderTexture", asset);
+            Snapshot("unstaged-asset-cannot-exempt-staged-loss", "camera-target-owner-lost");
+            RunGit("add", "Assets/View.renderTexture");
+            RunGit("-c", "user.name=SceneGuard Tests", "-c", "user.email=tests@example.invalid", "commit", "-qm", "Use owned camera buffers");
+            Write("Assets/View.unity", buffered.Replace("m_Name: View Camera", "m_Name: Updated Camera"));
+            RunGit("add", "Assets/View.unity");
+            Write("Assets/RenderOwner.cs.meta", "guid: 00000000000000000000000000000000\n");
+            RunGit("add", "Assets/RenderOwner.cs.meta");
+            Write("Assets/RenderOwner.cs.meta", "fileFormatVersion: 2\nguid: " + ownerScript + "\n");
+            Snapshot("staged-script-guid-change-cannot-hide-owner-loss", "camera-target-owner-lost");
+            RunGit("add", "Assets/RenderOwner.cs.meta");
+            RunGit("rm", "-q", "Assets/RenderOwner.cs.meta");
+            Write("Assets/RenderOwner.cs.meta", "fileFormatVersion: 2\nguid: " + ownerScript + "\n");
+            Snapshot("staged-script-meta-loss-cannot-use-working-tree", "camera-target-owner-lost");
+            RunGit("add", "Assets/RenderOwner.cs.meta");
+            Write("agent-checks.json", "{}");
+            Snapshot("revision-comparison-uses-revision-assets", source: Source.From("HEAD~1", "HEAD", null, false));
+        }
+        finally
+        {
+            foreach (var file in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
+                File.SetAttributes(file, FileAttributes.Normal);
+            Directory.Delete(root, true);
+        }
+        return failures;
     }
 
     private static string Git(string root, params string[] arguments)
@@ -416,6 +597,30 @@ public static class Program
 
         public string ReadBase(string root, string path) => Show(root, baseRevision + ":" + path);
 
+        public Dictionary<string, string> TargetGuids(string root, string suffix)
+        {
+            var arguments = new List<string> { "grep", "--full-name", "-z", "-e", "^guid: " };
+            if (staged)
+                arguments.Add("--cached");
+            else
+                arguments.Add(targetRevision!);
+            arguments.AddRange(new[] { "--", "Assets/*" + suffix, "Packages/*" + suffix });
+            var output = Git(root, arguments.ToArray());
+            var paths = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var line in output.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+            {
+                var separator = line.IndexOf('\0');
+                if (separator < 0)
+                    continue;
+                var path = line[..separator];
+                if (!staged)
+                    path = path[(targetRevision!.Length + 1)..];
+                if (!path.Contains("~/", StringComparison.Ordinal))
+                    paths[line[(separator + 7)..].Trim()] = path[..^5];
+            }
+            return paths;
+        }
+
         public string ReadTarget(string root, string path)
         {
             if (staged)
@@ -437,12 +642,14 @@ public static class Program
     {
         private readonly string root;
         private readonly string suffix;
+        private readonly Source? source;
         private Dictionary<string, string>? paths;
 
-        public GuidPaths(string root, string suffix)
+        public GuidPaths(string root, string suffix, Source? source = null)
         {
             this.root = root;
             this.suffix = suffix;
+            this.source = source;
         }
 
         public string? Path(string guid)
@@ -461,6 +668,11 @@ public static class Program
         {
             if (paths != null)
                 return;
+            if (source != null && !source.IsWorkingTree)
+            {
+                paths = source.TargetGuids(root, suffix);
+                return;
+            }
             paths = new Dictionary<string, string>(StringComparer.Ordinal);
             foreach (var folder in new[] { "Assets", "Packages", "Library/PackageCache" }.Select(folder => System.IO.Path.Combine(root, folder)).Where(Directory.Exists))
             foreach (var meta in Directory.EnumerateFiles(folder, "*" + suffix, SearchOption.AllDirectories).Where(file => !System.IO.Path.GetRelativePath(root, file).Contains("~" + System.IO.Path.DirectorySeparatorChar)))
@@ -642,6 +854,7 @@ public static class Program
 
         public List<FileResult> Files { get; } = new();
         public List<Issue> Issues { get; } = new();
+        public List<string> Notes { get; } = new();
 
         public void Add(bool damage, string kind, string path, Document document, string description, string detail)
         {
@@ -670,6 +883,8 @@ public static class Program
             }
             foreach (var issue in Issues.Take(limit))
                 text.AppendLine(issue.Line);
+            foreach (var note in Notes.Take(limit))
+                text.AppendLine(note);
             var objects = Files.Sum(file => file.Objects.Count);
             var truncated = objects > limit || Issues.Count > limit;
             text.AppendLine($"Scene guard: {Files.Count} files, {objects} changed objects, {Issues.Count(issue => issue.Damage)} damage, {Issues.Count(issue => !issue.Damage)} review{(truncated ? $", truncated to {limit}" : "")}.");
@@ -685,6 +900,7 @@ public static class Program
                 status = Status,
                 @new = Issues.Take(limit).Select(issue => issue.Line),
                 known = 0,
+                notes = Notes.Take(limit),
                 truncated = objects > limit || Issues.Count > limit,
                 files = Files.Select(file =>
                 {

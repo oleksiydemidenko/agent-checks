@@ -31,6 +31,10 @@ Useful options: `--base=<rev>`, `--staged`, `--range=A..B`, `--path=<prefix>`, `
 
 It reports **damage** (exit code 1) and **review** items (exit code 0). Built in: a camera that lost its target texture, components reordered, prefab modifications removed without a change to the source prefab.
 
+For cameras using `SetTargetBuffers`, configure `cameraTargetOwners` below. A cleared camera target is accepted only when exactly one enabled owner on the same GameObject references that camera and preserves the previous RenderTexture GUID and fileID. The RenderTexture and owner script must exist. Losing or disabling the owner, clearing its target or pointing it at a different camera still counts as damage, including when the camera target was already empty. Restoring a direct camera target after removing or disabling its owner is allowed. Ownership damage requires manual wiring repair; `--repair` does not guess component references.
+
+Staged checks read configuration, script GUIDs and target assets from the index. Revision comparisons read them from the target revision. Working tree edits cannot hide a missing staged reference.
+
 To block damage at commit time, call it from a `pre-commit` hook with `--staged`.
 
 ## project_check
@@ -51,6 +55,9 @@ Create `agent-checks.json` in the project root:
 {
     "baseline": "agent-checks-baseline.txt",
     "sceneGuard": {
+        "cameraTargetOwners": [
+            { "script": "Assets/Scripts/Rendering/RenderOwner.cs", "cameraField": "_camera", "targetField": "_target" }
+        ],
         "requiredEnabled": [
             { "kind": "render-root-disabled", "script": "Assets/Scripts/Rendering/RenderRoot.cs" }
         ],
@@ -71,6 +78,7 @@ Create `agent-checks.json` in the project root:
 ```
 
 - `requiredEnabled`: a component of this script being disabled counts as damage.
+- `cameraTargetOwners`: explicitly identify the component script and its serialized camera and RenderTexture fields. No camera names or component field names are inferred.
 - `hierarchyLabels`: show a component as `Label(asset name)`, read from a serialized asset reference.
 - `commands`: your own .NET tools. With `lines`, every output line except the summary line is an issue. `dependency-evidence` reads the report of Architector's tool.
 
